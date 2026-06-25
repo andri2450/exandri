@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diagnostic Checker - DNS, Email & Website</title>
+<style>
+    * { box-sizing: border-box; }
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+        background: #f4f5f7;
+        margin: 0;
+        padding: 24px;
+        color: #1d2129;
+    }
+    .container { max-width: 760px; margin: 0 auto; }
+    h1 { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+    .subtitle { color: #65676b; font-size: 14px; margin-bottom: 24px; }
+    .card {
+        background: #fff;
+        border: 1px solid #e4e6eb;
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+    label { display: block; font-size: 13px; color: #65676b; margin-bottom: 6px; margin-top: 14px; }
+    input[type=text], select {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid #ccd0d5;
+        border-radius: 8px;
+        font-size: 14px;
+    }
+    button {
+        margin-top: 18px;
+        background: #1877f2;
+        color: #fff;
+        border: none;
+        padding: 11px 22px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    button:hover { background: #166fe5; }
+    button:disabled { background: #a9c7f5; cursor: not-allowed; }
+    .error-msg { background: #fcebeb; color: #791f1f; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+    .notice { background: #fff8e6; color: #633806; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
+    .finding {
+        border: 1px solid #e4e6eb;
+        border-radius: 8px;
+        padding: 14px 16px;
+        margin-bottom: 12px;
+    }
+    .finding-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; }
+    .finding-title strong { font-size: 14px; }
+    .finding p { font-size: 13px; color: #4b4f56; margin: 4px 0; line-height: 1.5; }
+    .finding .solusi { background: #f0f6ff; padding: 8px 10px; border-radius: 6px; margin-top: 6px; }
+    .badge { padding: 3px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+    table td { padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
+    table td:first-child { color: #65676b; width: 35%; }
+    .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; word-break: break-all; }
+    .section-title { font-size: 14px; font-weight: 600; margin: 18px 0 8px; }
+    .loading { font-size: 13px; color: #65676b; }
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>Diagnostic Checker - DNS, Email &amp; Website</h1>
+    <p class="subtitle">Cek kendala DNS, indikasi kirim/terima email, dan akses website pada domain kamu. Berjalan 100% di browser (statis, cocok untuk GitHub Pages).</p>
+
+    <div class="notice">
+        Cek ini berbasis DNS publik dan tes koneksi HTTP/HTTPS dari browser. Cek port SMTP/IMAP/POP3 secara langsung <strong>tidak bisa</strong> dilakukan dari browser karena batasan keamanan browser — untuk itu perlu versi server-side (PHP/Node).
+    </div>
+
+    <div class="card">
+        <label for="target">Nama domain atau alamat email</label>
+        <input type="text" id="target" placeholder="contoh.com atau user@contoh.com">
+
+        <label for="kendala">Kendala yang terjadi</label>
+        <select id="kendala">
+            <option value="umum">Cek umum (semua aspek)</option>
+            <option value="website">Website tidak dapat diakses</option>
+            <option value="kirim">Email tidak terkirim</option>
+            <option value="terima">Email tidak diterima</option>
+        </select>
+
+        <button id="btnCheck">Cek Sekarang</button>
+    </div>
+
+    <div id="errorBox"></div>
+    <div id="loadingBox"></div>
+    <div id="resultBox"></div>
+
+    <p style="font-size:12px;color:#8a8d91;text-align:center;margin-top:24px;">
+        Hasil bersifat indikatif berdasarkan DNS publik dan tes dari browser, bukan pengganti pengecekan log server secara langsung.
+    </p>
+</div>
+
+<script>
+const DOH_ENDPOINT = 'https://dns.google/resolve';
+
+async function dnsLookup(name, type) {
+    try {
+        const url = `${DOH_ENDPOINT}?name=${encodeURIComponent(name)}&type=${type}`;
+        const res = await fetch(url, { headers: { accept: 'application/dns-json' } });
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data.Answer || [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function badge(level) {
+    const map = {
+        error: ['#fcebeb', '#791f1f', 'Bermasalah'],
+        warning: ['#faeeda', '#633806', 'Perhatian'],
+        info: ['#e6f1fb', '#0c447c', 'Info'],
+        ok: ['#eaf3de', '#27500a', 'Normal'],
+    };
+    const [bg, fg, label] = map[level] || map.info;
+    return `<span class="badge" style="background:${bg};color:${fg}">${label}</span>`;
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function checkWebsiteReachable(domain) {
+    // no-cors fetch: can't read status, but resolves only if connection succeeds (DNS+TCP+TLS).
+    const tryUrls = [`https://${domain}/`, `http://${domain}/`];
+    for (const url of tryUrls) {
+        try {
+            await fetch(url, { mode: 'no-cors', cache: 'no-store' });
+            return { reachable: true, via: url };
+        } catch (e) {
+            // continue to next
+        }
+    }
+    return { reachable: false };
+}
+
+async function runDiagnosis(rawInput, kendala) {
+    let domain = rawInput.trim();
+    if (domain.includes('@')) {
+        domain = domain.split('@').pop();
+    } else {
+        domain = domain.replace(/^https?:\/\//i, '').split('/')[0].replace(/\.$/, '');
+    }
+
+    if (!/^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(domain)) {
+        throw new Error('Format domain/email tidak valid: ' + domain);
+    }
+
+    const [aRecords, nsRecords, mxRecords, txtRecords, dmarcRecords] = await Promise.all([
+        dnsLookup(domain, 'A'),
+        dnsLookup(domain, 'NS'),
+        dnsLookup(domain, 'MX'),
+        dnsLookup(domain, 'TXT'),
+        dnsLookup('_dmarc.' + domain, 'TXT'),
+    ]);
+
+    const spfRecord = txtRecords
+        .map(r => r.data.replace(/^"|"$/g, ''))
+        .find(d => d.toLowerCase().startsWith('v=spf1')) || null;
+
+    const dmarcRecord = dmarcRecords
+        .map(r => r.data.replace(/^"|"$/g, ''))
+        .find(d => d.toLowerCase().startsWith('v=dmarc1')) || null;
+
+    const dkimSelectors = ['default', 'selector1', 'mail', 'k1'];
+    let dkimFound = null;
+    for (const sel of dkimSelectors) {
+        const rec = await dnsLookup(`${sel}._domainkey.${domain}`, 'TXT');
+        if (rec.length > 0) { dkimFound = sel; break; }
+    }
+
+    let websiteCheck = null;
+    if (kendala === 'website' || kendala === 'umum') {
+        websiteCheck = await checkWebsiteReachable(domain);
+    }
+
+    const findings = [];
+
+    if (aRecords.length === 0 && nsRecords.length === 0) {
+        findings.push({
+            level: 'error',
+            title: 'Domain tidak resolve sama sekali',
+            detail: 'Tidak ditemukan record A maupun NS untuk domain ini. Domain mungkin belum dikonfigurasi DNS-nya, salah ketik, atau belum delegasi ke nameserver.',
+            solusi: 'Pastikan domain sudah diarahkan ke nameserver cPanel/Plesk kamu (cek di registrar domain), lalu buat zone DNS dan record A di WHM/cPanel atau Plesk DNS settings.',
+        });
+    } else if (aRecords.length === 0) {
+        findings.push({
+            level: 'error',
+            title: 'Tidak ada record A',
+            detail: 'Nameserver ditemukan tapi tidak ada record A yang mengarah ke IP server. Ini bisa jadi sebab website tidak bisa diakses.',
+            solusi: 'Tambahkan record A di zona DNS (cPanel: Zone Editor / Plesk: DNS Settings) mengarah ke IP server hosting kamu.',
+        });
+    }
+
+    if ((kendala === 'website' || kendala === 'umum') && websiteCheck) {
+        if (!websiteCheck.reachable) {
+            findings.push({
+                level: 'error',
+                title: 'Website tidak bisa dijangkau dari browser',
+                detail: 'Percobaan koneksi ke domain ini lewat HTTP dan HTTPS gagal. Bisa karena web server down, firewall memblokir, sertifikat SSL error, atau DNS belum propagasi.',
+                solusi: 'Cek status web service (Apache/LiteSpeed/Nginx) di WHM/Plesk, cek firewall (CSF/iptables), cek sertifikat SSL (AutoSSL/Let\'s Encrypt), dan pastikan akun hosting tidak suspend.',
+            });
+        }
+    }
+
+    if (kendala === 'kirim' || kendala === 'umum') {
+        if (!spfRecord) {
+            findings.push({
+                level: 'warning',
+                title: 'Tidak ada SPF record',
+                detail: 'Domain tidak memiliki SPF (TXT record v=spf1). Email yang dikirim berisiko ditandai spam atau ditolak oleh penerima.',
+                solusi: `Tambahkan TXT record di DNS: "v=spf1 a mx ~all" (sesuaikan dengan IP/server mail kamu, idealnya tambahkan ip4:IP_SERVER_MAIL).`,
+            });
+        }
+        if (!dkimFound) {
+            findings.push({
+                level: 'warning',
+                title: 'DKIM tidak terdeteksi',
+                detail: 'Tidak ditemukan record DKIM dengan selector umum (default/selector1/mail/k1). DKIM membantu memastikan email tidak dipalsukan dan meningkatkan reputasi pengiriman.',
+                solusi: 'Aktifkan DKIM di cPanel (Email Deliverability tool) atau Plesk (Mail settings → DKIM signature) dan pastikan record TXT-nya sudah ditambahkan ke DNS.',
+            });
+        }
+        if (!dmarcRecord) {
+            findings.push({
+                level: 'warning',
+                title: 'Tidak ada DMARC record',
+                detail: 'Tanpa DMARC, kebijakan terhadap email yang gagal SPF/DKIM tidak terdefinisi, ini menurunkan reputasi domain di mata Gmail/Outlook.',
+                solusi: `Tambahkan TXT record di "_dmarc.${domain}": "v=DMARC1; p=none; rua=mailto:postmaster@${domain}" sebagai langkah awal monitoring.`,
+            });
+        }
+        findings.push({
+            level: 'info',
+            title: 'Cek port SMTP tidak tersedia di versi browser ini',
+            detail: 'Port 25/587/465 hanya bisa dicek dari server (browser tidak bisa membuka koneksi TCP mentah). Kemungkinan masalah outbound mail (port diblokir provider, service Exim/Postfix down) tidak bisa terdeteksi dari sini.',
+            solusi: 'Untuk cek port secara akurat, jalankan versi server-side (PHP) dari dalam server hosting kamu, atau minta admin server cek dengan: telnet/openssl ke port 25/587 dari server tersebut.',
+        });
+    }
+
+    if (kendala === 'terima' || kendala === 'umum') {
+        if (mxRecords.length === 0) {
+            findings.push({
+                level: 'error',
+                title: 'Tidak ada record MX',
+                detail: 'Domain tidak punya MX record, sehingga email masuk tidak tahu harus dikirim ke server mana. Email yang dikirim ke domain ini akan bounce/gagal.',
+                solusi: `Tambahkan MX record di DNS zone (cPanel Zone Editor / Plesk DNS Settings) mengarah ke mail.${domain} atau server mail yang sesuai.`,
+            });
+        }
+        findings.push({
+            level: 'info',
+            title: 'Cek port IMAP/POP3 tidak tersedia di versi browser ini',
+            detail: 'Port 143/993/110/995 hanya bisa dicek dari server. Kemungkinan masalah service Dovecot down tidak terdeteksi dari versi browser ini.',
+            solusi: 'Untuk cek port secara akurat, jalankan versi server-side (PHP) dari dalam server hosting kamu.',
+        });
+    }
+
+    if (findings.length === 0 || findings.every(f => f.level === 'info')) {
+        findings.unshift({
+            level: 'ok',
+            title: 'Tidak ditemukan masalah dari pengecekan DNS dasar',
+            detail: 'Record DNS yang relevan terlihat normal dari pengecekan otomatis ini.',
+            solusi: 'Jika kendala masih terjadi, cek log mendalam di server (mail log, error log web server) atau hubungi support hosting.',
+        });
+    }
+
+    return {
+        domain, aRecords, nsRecords, mxRecords, spfRecord, dmarcRecord, dkimFound, websiteCheck, findings,
+    };
+}
+
+function renderResult(r) {
+    const dnsRows = `
+        <tr><td>IP server (A)</td><td class="mono">${r.aRecords.map(a => escapeHtml(a.data)).join(', ') || '-'}</td></tr>
+        <tr><td>Nameserver (NS)</td><td class="mono">${r.nsRecords.map(n => escapeHtml(n.data)).join('<br>') || '-'}</td></tr>
+        <tr><td>MX record</td><td class="mono">${r.mxRecords.map(m => escapeHtml(m.data)).join('<br>') || '-'}</td></tr>
+        <tr><td>SPF</td><td class="mono">${r.spfRecord ? escapeHtml(r.spfRecord) : 'tidak ditemukan'}</td></tr>
+        <tr><td>DKIM selector terdeteksi</td><td class="mono">${r.dkimFound ? escapeHtml(r.dkimFound) : 'tidak ditemukan'}</td></tr>
+        <tr><td>DMARC</td><td class="mono">${r.dmarcRecord ? escapeHtml(r.dmarcRecord) : 'tidak ditemukan'}</td></tr>
+        ${r.websiteCheck ? `<tr><td>Website reachable</td><td class="mono">${r.websiteCheck.reachable ? 'ya (' + escapeHtml(r.websiteCheck.via) + ')' : 'tidak'}</td></tr>` : ''}
+    `;
+
+    const findingsHtml = r.findings.map(f => `
+        <div class="finding">
+            <div class="finding-title">
+                <strong>${escapeHtml(f.title)}</strong>
+                ${badge(f.level)}
+            </div>
+            <p>${escapeHtml(f.detail)}</p>
+            <p class="solusi"><strong>Solusi:</strong> ${escapeHtml(f.solusi)}</p>
+        </div>
+    `).join('');
+
+    return `
+        <div class="card">
+            <div class="section-title">Hasil diagnosis untuk <span class="mono">${escapeHtml(r.domain)}</span></div>
+            ${findingsHtml}
+        </div>
+        <div class="card">
+            <div class="section-title">Detail DNS</div>
+            <table>${dnsRows}</table>
+        </div>
+    `;
+}
+
+document.getElementById('btnCheck').addEventListener('click', async () => {
+    const target = document.getElementById('target').value;
+    const kendala = document.getElementById('kendala').value;
+    const errorBox = document.getElementById('errorBox');
+    const loadingBox = document.getElementById('loadingBox');
+    const resultBox = document.getElementById('resultBox');
+    const btn = document.getElementById('btnCheck');
+
+    errorBox.innerHTML = '';
+    resultBox.innerHTML = '';
+
+    if (!target.trim()) {
+        errorBox.innerHTML = '<div class="error-msg">Masukkan nama domain atau alamat email.</div>';
+        return;
+    }
+
+    btn.disabled = true;
+    loadingBox.innerHTML = '<p class="loading">Sedang mengecek, mohon tunggu...</p>';
+
+    try {
+        const result = await runDiagnosis(target, kendala);
+        resultBox.innerHTML = renderResult(result);
+    } catch (e) {
+        errorBox.innerHTML = `<div class="error-msg">${escapeHtml(e.message)}</div>`;
+    } finally {
+        loadingBox.innerHTML = '';
+        btn.disabled = false;
+    }
+});
+
+document.getElementById('target').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('btnCheck').click();
+});
+</script>
+</body>
+</html>
